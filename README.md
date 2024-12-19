@@ -359,3 +359,17 @@ If you use this library or find the documentation useful for your research, plea
 <a href="https://github.com/nerfstudio-project/nerfstudio/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=nerfstudio-project/nerfstudio" />
 </a>
+
+# Training, Viewing, and Rendering
+
+## Training
+
+You can train any of the new models using the command `ns-train <method> --data <dataset_dir>`. For `depth_nerfacto` and `nerfacto`, I recommend including the param `--pipeline.model.camera-optimizer.mode off` or else it will attempt to optimize the camera poses as well. For other methods like `mip-nerf` and `nerf`, this param is not available and I believe it is off by default. However, `mip-nerf` and `nerf` uses a different naming convention for training and rendering so you may need to rename some of the options in the .json file. Just a warning, `mip-nerf` and `nerf` took over 60 hours of continuous running to train. I was only able to train `mip-nerf` for the apartment dataset. 
+
+## Viewing
+
+After training you can view the trained model using the command `ns-viewer --load-config <output config file path`. After training, there should be a `config.yaml` file that was generated that you can load to view the trained output. From the viewer you should be able to see the renders for RGB and depth. 
+
+## Rendering
+
+This one is a little messy and I've had to make some changes to the API. You can render depth images using `ns-render camera-path --load-config <path-to-config.yaml> --camera-path-filename <path-to-camera_path.json> --output-path <output-folder> --output-format images`. But currently the renderer only saves .jpg files, which doesn't necessarily give the most accurate results. I've bypassed this by also saving pickle files of the actual depth images. If you would prefer that, you can add the lines to save pickle files in line 213 of `render.py`. Once the depth images are generated, you can run the `distance_images_from_depth.py` to view and save the distance images. 
