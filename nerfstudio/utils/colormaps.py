@@ -137,16 +137,17 @@ def apply_depth_colormap(
     near_plane = near_plane if near_plane is not None else float(torch.min(depth))
     far_plane = far_plane if far_plane is not None else float(torch.max(depth))
 
-    depth = (depth - near_plane) / (far_plane - near_plane + 1e-10)
-    depth = torch.clip(depth, 0, 1)
+    # depth = (depth - near_plane) / (far_plane - near_plane + 1e-10)
+    # depth = torch.clip(depth, 0, 1)
+    depth = depth / 6553.5
     # depth = torch.nan_to_num(depth, nan=0.0) # TODO(ethan): remove this
 
-    colored_image = apply_colormap(depth, colormap_options=colormap_options)
+    # colored_image = apply_colormap(depth, colormap_options=colormap_options)
 
-    if accumulation is not None:
-        colored_image = colored_image * accumulation + (1 - accumulation)
+    # if accumulation is not None:
+    #     colored_image = colored_image * accumulation + (1 - accumulation)
 
-    return colored_image
+    return depth
 
 
 def apply_boolean_colormap(

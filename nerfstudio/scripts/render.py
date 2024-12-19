@@ -216,7 +216,6 @@ def _render_trajectory_video(
                         output_image = (
                             colormaps.apply_depth_colormap(
                                 output_image,
-                                accumulation=outputs["accumulation"],
                                 near_plane=depth_near_plane,
                                 far_plane=depth_far_plane,
                                 colormap_options=colormap_options,
@@ -224,6 +223,8 @@ def _render_trajectory_video(
                             .cpu()
                             .numpy()
                         )
+                        # import pdb
+                        # pdb.set_trace()
                     elif rendered_output_name == "rgba":
                         output_image = output_image.detach().cpu().numpy()
                     else:
@@ -234,7 +235,8 @@ def _render_trajectory_video(
                             )
                             .cpu()
                             .numpy()
-                        )
+                        ).astype(np.uint8)
+                        output_image = np.squeeze(output_image, axis=2)
                     render_image.append(output_image)
 
                 # Add closest training image to the right of the rendered image
@@ -859,7 +861,7 @@ class DatasetRender(BaseRender):
                             output_image = (
                                 colormaps.apply_depth_colormap(
                                     output_image,
-                                    accumulation=outputs["accumulation"],
+                                    accumulation=outputs["depth"],
                                     near_plane=self.depth_near_plane,
                                     far_plane=self.depth_far_plane,
                                     colormap_options=self.colormap_options,
