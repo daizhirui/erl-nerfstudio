@@ -223,8 +223,6 @@ def _render_trajectory_video(
                             .cpu()
                             .numpy()
                         )
-                        # import pdb
-                        # pdb.set_trace()
                     elif rendered_output_name == "rgba":
                         output_image = output_image.detach().cpu().numpy()
                     else:
@@ -264,6 +262,8 @@ def _render_trajectory_video(
                 if output_format == "images":
                     if image_format == "png":
                         media.write_image(output_image_dir / f"{camera_idx:05d}.png", render_image, fmt="png")
+                    if image_format == "tiff":
+                        media.write_image(output_image_dir / f"{camera_idx:05d}.tiff", render_image, fmt="tiff")
                     if image_format == "jpeg":
                         media.write_image(
                             output_image_dir / f"{camera_idx:05d}.jpg", render_image, fmt="jpeg", quality=jpeg_quality

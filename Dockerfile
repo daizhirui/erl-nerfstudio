@@ -6,15 +6,15 @@ ARG CUDA_ARCHITECTURES="90;89;86;80;75;70;61"
 ARG NERFSTUDIO_VERSION=""
 
 # Pull source either provided or from git.
-FROM scratch as source_copy
+FROM scratch AS source_copy
 ONBUILD COPY . /tmp/nerfstudio
-FROM alpine/git as source_no_copy
+FROM alpine/git AS source_no_copy
 ARG NERFSTUDIO_VERSION
 ONBUILD RUN git clone --branch ${NERFSTUDIO_VERSION} --recursive https://github.com/nerfstudio-project/nerfstudio.git /tmp/nerfstudio
 ARG NERFSTUDIO_VERSION
-FROM source_${NERFSTUDIO_VERSION:+no_}copy as source
+FROM source_${NERFSTUDIO_VERSION:+no_}copy AS source
 
-FROM nvidia/cuda:${NVIDIA_CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION} as builder
+FROM nvidia/cuda:${NVIDIA_CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION} AS builder
 ARG CUDA_ARCHITECTURES
 ARG NVIDIA_CUDA_VERSION
 ARG UBUNTU_VERSION
@@ -23,28 +23,28 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV QT_XCB_GL_INTEGRATION=xcb_egl
 RUN apt-get update && \
     apt-get install -y --no-install-recommends --no-install-suggests \
-        git \
-        cmake \
-        ninja-build \
-        build-essential \
-        libboost-program-options-dev \
-        libboost-filesystem-dev \
-        libboost-graph-dev \
-        libboost-system-dev \
-        libeigen3-dev \
-        libflann-dev \
-        libfreeimage-dev \
-        libmetis-dev \
-        libgoogle-glog-dev \
-        libgtest-dev \
-        libsqlite3-dev \
-        libglew-dev \
-        qtbase5-dev \
-        libqt5opengl5-dev \
-        libcgal-dev \
-        libceres-dev \
-        python3.10-dev \
-        python3-pip
+    git \
+    cmake \
+    ninja-build \
+    build-essential \
+    libboost-program-options-dev \
+    libboost-filesystem-dev \
+    libboost-graph-dev \
+    libboost-system-dev \
+    libeigen3-dev \
+    libflann-dev \
+    libfreeimage-dev \
+    libmetis-dev \
+    libgoogle-glog-dev \
+    libgtest-dev \
+    libsqlite3-dev \
+    libglew-dev \
+    qtbase5-dev \
+    libqt5opengl5-dev \
+    libcgal-dev \
+    libceres-dev \
+    python3.10-dev \
+    python3-pip
 
 # Build and install COLMAP.
 RUN git clone https://github.com/colmap/colmap.git && \
@@ -54,7 +54,7 @@ RUN git clone https://github.com/colmap/colmap.git && \
     cd build && \
     mkdir -p /build && \
     cmake .. -GNinja "-DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES}" \
-        -DCMAKE_INSTALL_PREFIX=/build/colmap && \
+    -DCMAKE_INSTALL_PREFIX=/build/colmap && \
     ninja install -j1 && \
     cd ~
 
@@ -103,23 +103,23 @@ LABEL org.opencontainers.image.documentation = "https://docs.nerf.studio/"
 # build dependencies are not needed.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends --no-install-suggests \
-        libboost-filesystem1.74.0 \
-        libboost-program-options1.74.0 \
-        libc6 \
-        libceres2 \
-        libfreeimage3 \
-        libgcc-s1 \
-        libgl1 \
-        libglew2.2 \
-        libgoogle-glog0v5 \
-        libqt5core5a \
-        libqt5gui5 \
-        libqt5widgets5 \
-        python3.10 \
-        python3.10-dev \
-        build-essential \
-        python-is-python3 \
-        ffmpeg
+    libboost-filesystem1.74.0 \
+    libboost-program-options1.74.0 \
+    libc6 \
+    libceres2 \
+    libfreeimage3 \
+    libgcc-s1 \
+    libgl1 \
+    libglew2.2 \
+    libgoogle-glog0v5 \
+    libqt5core5a \
+    libqt5gui5 \
+    libqt5widgets5 \
+    python3.10 \
+    python3.10-dev \
+    build-essential \
+    python-is-python3 \
+    ffmpeg
 
 # Copy packages from builder stage.
 COPY --from=builder /build/colmap/ /usr/local/
