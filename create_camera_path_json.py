@@ -17,25 +17,22 @@ class Frame:
 
 @dataclass(frozen=True)
 class TransformJson:
-    fl_x : float
+    fl_x: float
     fl_y: float
     cx: float
     cy: float
     w: int
     h: int
     frames: List[Frame]
-    # k1: float = -0.013472197525381842
-    # k2: float = 0.007509466554079491
-    # p1: float = -0.0011800209664517077
-    # p2: float = 0.01116939407701522
 
-    k1: float = 0.
-    k2: float = 0.
-    p1: float = 0.
-    p2: float = 0.
+    # distortion parameters
+    k1: float = 0.0
+    k2: float = 0.0
+    p1: float = 0.0
+    p2: float = 0.0
 
     aabb_scale: int = 16
-    camera_model: str = 'OPENCV'
+    camera_model: str = "OPENCV"
 
 
 @dataclass(frozen=True)
@@ -59,63 +56,64 @@ class CameraPath:
     smoothness_value: float = 0.0
     seconds: float = 1.0
     fps: int = 30
-    camera_type: str = 'perspective'
+    camera_type: str = "perspective"
     default_transition_sec: float = 0.0
-    
 
-oTc = np.array([
-    [0, -1, 0, 0],
-    [0, 0, -1, 0],
-    [1, 0, 0, 0],
-    [0, 0, 0, 1]
-])
 
-nTo = np.array([
-    [1, 0, 0, 0],
-    [0, -1, 0, 0],
-    [0, 0, -1, 0],
-    [0, 0, 0, 1],
-])
+oTc = np.array([[0, -1, 0, 0], [0, 0, -1, 0], [1, 0, 0, 0], [0, 0, 0, 1]])
+
+nTo = np.array(
+    [
+        [1, 0, 0, 0],
+        [0, -1, 0, 0],
+        [0, 0, -1, 0],
+        [0, 0, 0, 1],
+    ]
+)
 cTn = oTc.T @ nTo.T
 
-test_pose = np.array([
+test_pose = np.array(
     [
-    0.7645703724048531,
-    0.17262940210214459,
-    -0.6209921377687162,
-    0.27380807756798403,
-    -0.6445402591310369,
-    0.20477747415065722,
-    -0.7366369800924829,
-    -0.6898194169735075,
-    5.551115123125783e-17,
-    0.9634652435922809,
-    0.2678333892360454,
-    0.013879851639431357,
-    0,
-    0,
-    0,
-    1
-]
-])
+        [
+            0.7645703724048531,
+            0.17262940210214459,
+            -0.6209921377687162,
+            0.27380807756798403,
+            -0.6445402591310369,
+            0.20477747415065722,
+            -0.7366369800924829,
+            -0.6898194169735075,
+            5.551115123125783e-17,
+            0.9634652435922809,
+            0.2678333892360454,
+            0.013879851639431357,
+            0,
+            0,
+            0,
+            1,
+        ]
+    ]
+)
 
 
 # # Filenames
 DATASET_FOLDER = os.getcwd()
-dataset_directory = os.path.join(DATASET_FOLDER, 'data/replica_room_0/test_dataset')
-test_poses_pkl_filename = os.path.join(dataset_directory, 'poses.pkl')
-dataparser_transform_filename = os.path.join(DATASET_FOLDER, 'outputs/replica_room_0/nerfacto/2024-11-26_180323/dataparser_transforms.json') # update this path
-param_file_dir = os.path.join(dataset_directory, 'sensor_setting.yaml')
+dataset_directory = os.path.join(DATASET_FOLDER, "data/replica_room_0/test_dataset")
+test_poses_pkl_filename = os.path.join(dataset_directory, "poses.pkl")
+dataparser_transform_filename = os.path.join(
+    DATASET_FOLDER, "outputs/replica_room_0/nerfacto/2024-11-26_180323/dataparser_transforms.json"
+)  # update this path
+param_file_dir = os.path.join(dataset_directory, "sensor_setting.yaml")
 
 
 # Scale and Transform done internally in Nerfstudio
 with open(dataparser_transform_filename) as f:
     dataparser_transform = json.load(f)
-Tdata_parser = np.array(dataparser_transform['transform']) 
+Tdata_parser = np.array(dataparser_transform["transform"])
 Tdata_parser = np.vstack((Tdata_parser, np.array([0, 0, 0, 1])))
-scale_dataparser = dataparser_transform['scale']
+scale_dataparser = dataparser_transform["scale"]
 
-test_pose = test_pose.reshape((4,4))
+test_pose = test_pose.reshape((4, 4))
 test_pose[:3, 3] = test_pose[:3, 3] / scale_dataparser
 test_pose = np.linalg.inv(Tdata_parser) @ test_pose
 ctw = test_pose @ np.linalg.inv(cTn)
