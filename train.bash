@@ -6,7 +6,7 @@ set -x
 #SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 DATA_DIR=/home/daizhirui/Data/erl_neural_sddf/datasets
 OUTPUT_DIR=/home/daizhirui/results/erl_neural_sddf/baselines/
-COMMON_ARGS="--pipeline.model.camera-optimizer.mode off --vis tensorboard"
+COMMON_ARGS="--pipeline.model.camera-optimizer.mode off --vis tensorboard --max-num-iterations 300000"
 
 for dataset in $(ls $DATA_DIR); do
     if [[ $dataset != *"rgbd" ]]; then
