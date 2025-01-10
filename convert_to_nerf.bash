@@ -12,7 +12,9 @@ for dataset in $(ls $DATA_DIR); do
     fi
     echo $dataset
     python3 $SCRIPT_DIR/convert_to_nerf.py \
-        --base_path $DATA_DIR/$dataset/scans/train --output_file $DATA_DIR/$dataset/scans/train/transforms.json
-    python3 $SCRIPT_DIR/convert_to_nerf.py \
-        --base_path $DATA_DIR/$dataset/scans/test --output_file $DATA_DIR/$dataset/scans/test/transforms.json
+            --base_path $DATA_DIR/$dataset --output_file $DATA_DIR/$dataset/transforms.json
+#    python3 $SCRIPT_DIR/convert_to_nerf.py \
+#        --base_path $DATA_DIR/$dataset/scans/train --output_file $DATA_DIR/$dataset/scans/train/transforms.json
+#    python3 $SCRIPT_DIR/convert_to_nerf.py \
+#        --base_path $DATA_DIR/$dataset/scans/test --output_file $DATA_DIR/$dataset/scans/test/transforms.json
 done

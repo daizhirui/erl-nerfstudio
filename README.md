@@ -420,7 +420,7 @@ training and rendering so you may need to rename some of the options in the .jso
 
 ## Viewing
 
-After training you can view the trained model using the command `ns-viewer --load-config <output config file path`.
+After training you can view the trained model using the command `ns-viewer --load-config <output config file path>`.
 After training, there should be a `config.yaml` file that was generated that you can load to view the trained output.
 From the viewer you should be able to see the renders for RGB and depth.
 

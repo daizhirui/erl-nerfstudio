@@ -25,11 +25,13 @@ import os
 import shutil
 import struct
 import sys
+import time
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
+import cv2
 import mediapy as media
 import numpy as np
 import torch
@@ -59,6 +61,77 @@ from nerfstudio.utils import colormaps, install_checks
 from nerfstudio.utils.eval_utils import eval_setup
 from nerfstudio.utils.rich_utils import CONSOLE, ItersPerSecColumn
 from nerfstudio.utils.scripts import run_command
+
+
+class CpuTimer:
+
+    def __init__(self, message, repeats: int = 1, warmup: int = 0, progress=CONSOLE):
+        self.message = message
+        self.repeats = repeats
+        self.warmup = warmup
+        self.cnt = 0
+        self.t = 0
+        self.average_t = 0
+        self.total_t = 0
+        self.progress = progress
+
+    def __enter__(self):
+        self.start = time.perf_counter()
+        return self
+
+    def __exit__(self, *args):
+        self.end = time.perf_counter()
+        if self.cnt < self.warmup:
+            self.cnt += 1
+            return
+        self.cnt += 1
+        assert self.cnt <= self.repeats
+        self.t = self.end - self.start
+        n = self.repeats - self.warmup
+        self.average_t += self.t / n
+        self.total_t += self.t
+        self.progress.print(f"{self.message}: {self.t:.6f}(cur)/{self.average_t:.6f}(avg) seconds")
+
+
+class GpuTimer:
+
+    def __init__(self, message, repeats: int = 1, warmup: int = 0, progress=CONSOLE):
+        self.message = message
+        self.repeats = repeats
+        self.warmup = warmup
+        self.cnt = 0
+        self.t = 0
+        self.average_t = 0
+        self.total_t = 0
+        self.progress = progress
+
+    def __enter__(self):
+        self.start = torch.cuda.Event(enable_timing=True)
+        self.end = torch.cuda.Event(enable_timing=True)
+        self.start.record()
+        return self
+
+    def __exit__(self, *args):
+        self.end.record()
+        torch.cuda.synchronize()
+        self.t = self.start.elapsed_time(self.end) / 1e3
+        if self.cnt < self.warmup:
+            self.cnt += 1
+            return
+        self.cnt += 1
+        assert self.cnt <= self.repeats
+        n = self.repeats - self.warmup
+        self.average_t += self.t / n
+        self.total_t += self.t
+        self.progress.print(
+            f"{self.message}: {self.t:.6f}(cur)/{self.average_t:.6f}(avg)/{self.total_t:.6f}(total) seconds"
+        )
+
+
+def compute_mae(pred, gt):
+    mask = gt > 1e-3
+    error = np.mean(np.abs(pred[mask] - gt[mask]))  # mean absolute error
+    return error
 
 
 def _render_trajectory_video(
@@ -96,9 +169,23 @@ def _render_trajectory_video(
         check_occlusions: If true, checks line-of-sight occlusions when computing camera distance and rejects cameras not visible to each other
     """
     CONSOLE.print("[bold green]Creating trajectory " + output_format)
+
+    if hasattr(pipeline.datamanager, "train_dataparser_outputs"):
+        transform = pipeline.datamanager.train_dataparser_outputs.dataparser_transform
+        scale = pipeline.datamanager.train_dataparser_outputs.dataparser_scale
+        # cameras.camera_to_worlds = transform @ cameras.camera_to_worlds
+        camera_to_worlds = torch.cat(
+            [cameras.camera_to_worlds, torch.zeros_like(cameras.camera_to_worlds[:, [0]])], dim=1
+        )
+        camera_to_worlds[:, 3, 3] = 1.0
+        cameras.camera_to_worlds = torch.einsum("ij,bjk->bik", transform, camera_to_worlds)
+        cameras.camera_to_worlds[:, :3, 3] *= scale
+
     cameras.rescale_output_resolution(rendered_resolution_scaling_factor)
     cameras = cameras.to(pipeline.device)
     fps = len(cameras) / seconds
+
+    rays_norm = cameras[0:1].generate_rays(camera_indices=0, keep_shape=True).metadata["directions_norm"][..., 0]
 
     progress = Progress(
         TextColumn(":movie_camera: Rendering :movie_camera:"),
@@ -136,6 +223,9 @@ def _render_trajectory_video(
             train_cameras = None
 
         with progress:
+            timer = GpuTimer("Rendering", repeats=cameras.size, warmup=1, progress=progress)
+            print(pipeline.datamanager.train_dataset.metadata.keys())
+            print(pipeline.datamanager.eval_dataset.image_filenames[0])
             for camera_idx in progress.track(range(cameras.size), description=""):
                 obb_box = None
                 if crop_data is not None:
@@ -194,9 +284,10 @@ def _render_trajectory_video(
                         )
                 else:
                     with torch.no_grad():
-                        outputs = pipeline.model.get_outputs_for_camera(
-                            cameras[camera_idx : camera_idx + 1], obb_box=obb_box
-                        )
+                        with timer:
+                            outputs = pipeline.model.get_outputs_for_camera(
+                                cameras[camera_idx : camera_idx + 1], obb_box=obb_box
+                            )
                         if rendered_output_names is not None and "rgba" in rendered_output_names:
                             rgba = pipeline.model.get_rgba_image(outputs=outputs, output_name="rgb")
                             outputs["rgba"] = rgba
@@ -213,6 +304,22 @@ def _render_trajectory_video(
                     output_image = outputs[rendered_output_name]
                     is_depth = rendered_output_name.find("depth") != -1
                     if is_depth:
+                        depth_folder = output_image_dir / rendered_output_name
+                        os.makedirs(depth_folder, exist_ok=True)
+                        depth_image = output_image[..., 0]
+                        if hasattr(pipeline.datamanager, "train_dataparser_outputs"):
+                            scale = pipeline.datamanager.train_dataparser_outputs.dataparser_scale
+                            depth_image = depth_image / scale  # remove scaling
+                        cv2.imwrite(
+                            str(depth_folder / f"{camera_idx:06d}.tiff"),
+                            depth_image.cpu().numpy().astype(np.float32),
+                        )
+
+                        range_image = (depth_image * rays_norm).cpu().numpy()
+                        range_folder = output_image_dir / "range"
+                        os.makedirs(range_folder, exist_ok=True)
+                        cv2.imwrite(str(range_folder / f"{camera_idx:06d}.tiff"), range_image.astype(np.float32))
+
                         output_image = (
                             colormaps.apply_depth_colormap(
                                 output_image,
@@ -223,8 +330,11 @@ def _render_trajectory_video(
                             .cpu()
                             .numpy()
                         )
-                    elif rendered_output_name == "rgba":
+                    elif rendered_output_name == "rgba" or rendered_output_name == "rgb":
                         output_image = output_image.detach().cpu().numpy()
+                        rgb_folder = output_image_dir / rendered_output_name
+                        os.makedirs(rgb_folder, exist_ok=True)
+                        cv2.imwrite(str(rgb_folder / f"{camera_idx:06d}.png"), output_image)
                     else:
                         output_image = (
                             colormaps.apply_colormap(
@@ -261,12 +371,12 @@ def _render_trajectory_video(
                 render_image = np.concatenate(render_image, axis=1)
                 if output_format == "images":
                     if image_format == "png":
-                        media.write_image(output_image_dir / f"{camera_idx:05d}.png", render_image, fmt="png")
+                        media.write_image(output_image_dir / f"{camera_idx:06d}.png", render_image, fmt="png")
                     if image_format == "tiff":
-                        media.write_image(output_image_dir / f"{camera_idx:05d}.tiff", render_image, fmt="tiff")
+                        media.write_image(output_image_dir / f"{camera_idx:06d}.tiff", render_image, fmt="tiff")
                     if image_format == "jpeg":
                         media.write_image(
-                            output_image_dir / f"{camera_idx:05d}.jpg", render_image, fmt="jpeg", quality=jpeg_quality
+                            output_image_dir / f"{camera_idx:06d}.jpg", render_image, fmt="jpeg", quality=jpeg_quality
                         )
                 if output_format == "video":
                     if writer is None:
@@ -295,6 +405,11 @@ def _render_trajectory_video(
     else:
         table.add_row("Images", str(output_image_dir))
     CONSOLE.print(Panel(table, title="[bold][green]:tada: Render Complete :tada:[/bold]", expand=False))
+    CONSOLE.print(
+        f"Test complete:\n"
+        f"{len(cameras)} frames rendered in total.\n"
+        f"timing(second): (itr){timer.average_t:.6f}/(total){timer.total_t:.6f}."
+    )
 
 
 def insert_spherical_metadata_into_file(
@@ -417,7 +532,7 @@ class BaseRender:
     """Path to config YAML file."""
     output_path: Path = Path("renders/output.mp4")
     """Path to output video file."""
-    image_format: Literal["jpeg", "png"] = "jpeg"
+    image_format: Literal["jpeg", "png", "tiff"] = "png"
     """Image format"""
     jpeg_quality: int = 100
     """JPEG quality"""
@@ -558,9 +673,9 @@ class RenderCameraPath(BaseRender):
                     self.output_path = Path(str(left_eye_path.parent)[:-5])
                     self.output_path.mkdir(parents=True, exist_ok=True)
                     if self.image_format == "png":
-                        ffmpeg_ods_command = f'ffmpeg -y -pattern_type glob -i "{str(left_eye_path.with_suffix("") / "*.png")}"  -pattern_type glob -i "{str(right_eye_path.with_suffix("") / "*.png")}" -filter_complex vstack -start_number 0 "{str(self.output_path)+"//%05d.png"}"'
+                        ffmpeg_ods_command = f'ffmpeg -y -pattern_type glob -i "{str(left_eye_path.with_suffix("") / "*.png")}"  -pattern_type glob -i "{str(right_eye_path.with_suffix("") / "*.png")}" -filter_complex vstack -start_number 0 "{str(self.output_path)+"//%06d.png"}"'
                     elif self.image_format == "jpeg":
-                        ffmpeg_ods_command = f'ffmpeg -y -pattern_type glob -i "{str(left_eye_path.with_suffix("") / "*.jpg")}"  -pattern_type glob -i "{str(right_eye_path.with_suffix("") / "*.jpg")}" -filter_complex vstack -start_number 0 "{str(self.output_path)+"//%05d.jpg"}"'
+                        ffmpeg_ods_command = f'ffmpeg -y -pattern_type glob -i "{str(left_eye_path.with_suffix("") / "*.jpg")}"  -pattern_type glob -i "{str(right_eye_path.with_suffix("") / "*.jpg")}" -filter_complex vstack -start_number 0 "{str(self.output_path)+"//%06d.jpg"}"'
                     run_command(ffmpeg_ods_command, verbose=False)
 
                 # remove the temp files directory
@@ -579,9 +694,9 @@ class RenderCameraPath(BaseRender):
                     self.output_path = Path(str(left_eye_path.parent)[:-5])
                     self.output_path.mkdir(parents=True, exist_ok=True)
                     if self.image_format == "png":
-                        ffmpeg_vr180_command = f'ffmpeg -y -pattern_type glob -i "{str(left_eye_path.with_suffix("") / "*.png")}"  -pattern_type glob -i "{str(right_eye_path.with_suffix("") / "*.png")}" -filter_complex hstack -start_number 0 "{str(self.output_path)+"//%05d.png"}"'
+                        ffmpeg_vr180_command = f'ffmpeg -y -pattern_type glob -i "{str(left_eye_path.with_suffix("") / "*.png")}"  -pattern_type glob -i "{str(right_eye_path.with_suffix("") / "*.png")}" -filter_complex hstack -start_number 0 "{str(self.output_path)+"//%06d.png"}"'
                     elif self.image_format == "jpeg":
-                        ffmpeg_vr180_command = f'ffmpeg -y -pattern_type glob -i "{str(left_eye_path.with_suffix("") / "*.jpg")}"  -pattern_type glob -i "{str(right_eye_path.with_suffix("") / "*.jpg")}" -filter_complex hstack -start_number 0 "{str(self.output_path)+"//%05d.jpg"}"'
+                        ffmpeg_vr180_command = f'ffmpeg -y -pattern_type glob -i "{str(left_eye_path.with_suffix("") / "*.jpg")}"  -pattern_type glob -i "{str(right_eye_path.with_suffix("") / "*.jpg")}" -filter_complex hstack -start_number 0 "{str(self.output_path)+"//%06d.jpg"}"'
                     run_command(ffmpeg_vr180_command, verbose=False)
 
                 # remove the temp files directory
@@ -760,6 +875,16 @@ class DatasetRender(BaseRender):
         data_manager_config = config.pipeline.datamanager
         assert isinstance(data_manager_config, (VanillaDataManagerConfig, FullImageDatamanagerConfig))
 
+        if hasattr(pipeline.datamanager, "train_dataparser_outputs"):
+            scale = pipeline.datamanager.train_dataparser_outputs.dataparser_scale
+        else:
+            scale = 1.0
+        rays_norm = (
+            pipeline.datamanager.train_dataset.cameras[0:1]
+            .generate_rays(camera_indices=0, keep_shape=True)
+            .metadata["directions_norm"][..., 0]
+        ).to(pipeline.device)
+
         for split in self.split.split("+"):
             datamanager: VanillaDataManager
             dataset: Dataset
@@ -794,9 +919,12 @@ class DatasetRender(BaseRender):
                 TimeRemainingColumn(elapsed_when_finished=False, compact=False),
                 TimeElapsedColumn(),
             ) as progress:
+                timer = GpuTimer("Rendering", repeats=len(dataloader), warmup=1, progress=progress)
+                errors = []
                 for camera_idx, (camera, batch) in enumerate(progress.track(dataloader, total=len(dataset))):
                     with torch.no_grad():
-                        outputs = pipeline.model.get_outputs_for_camera(camera)
+                        with timer:
+                            outputs = pipeline.model.get_outputs_for_camera(camera)
                         if self.rendered_output_names is not None and "rgba" in self.rendered_output_names:
                             rgba = pipeline.model.get_rgba_image(outputs=outputs, output_name="rgb")
                             outputs["rgba"] = rgba
@@ -825,13 +953,19 @@ class DatasetRender(BaseRender):
 
                         is_raw = False
                         is_depth = rendered_output_name.find("depth") != -1
-                        image_name = f"{camera_idx:05d}"
+                        is_normals = rendered_output_name.find("normals") != -1
 
                         # Try to get the original filename
                         image_name = dataparser_outputs.image_filenames[camera_idx].relative_to(images_root)
+                        dataset_folder = dataparser_outputs.image_filenames[camera_idx].parent.parent
+                        # depth_gt_folder = dataset_folder / "depth"
+                        range_gt_folder = dataset_folder / "range"
 
                         output_path = self.output_path / split / rendered_output_name / image_name
                         output_path.parent.mkdir(exist_ok=True, parents=True)
+
+                        range_folder = self.output_path / split / "range"
+                        range_folder.mkdir(exist_ok=True, parents=True)
 
                         output_name = rendered_output_name
                         if output_name.startswith("raw-"):
@@ -858,10 +992,45 @@ class DatasetRender(BaseRender):
                         elif output_name == "rgba":
                             output_image = output_image.detach().cpu().numpy()
                         elif is_depth:
+                            depth_image = output_image[..., 0] / scale  # remove scaling
+                            cv2.imwrite(
+                                str(output_path.with_suffix(".tiff")),
+                                depth_image.cpu().numpy().astype(np.float32),
+                            )
+
+                            range_image = depth_image * rays_norm
+                            output_path = range_folder / image_name
+                            cv2.imwrite(
+                                str(output_path.with_suffix(".tiff")),
+                                range_image.cpu().numpy().astype(np.float32),
+                            )
+                            media.write_image(
+                                output_path.with_suffix(".png"),
+                                colormaps.apply_depth_colormap(
+                                    range_image,
+                                    accumulation=None,
+                                    near_plane=None,
+                                    far_plane=None,
+                                    colormap_options=self.colormap_options,
+                                )
+                                .cpu()
+                                .numpy(),
+                                fmt="png",
+                            )
+                            range_image = range_image.cpu().numpy()
+                            range_image_gt = cv2.imread(
+                                str(range_gt_folder / image_name.with_suffix(".tiff")),
+                                cv2.IMREAD_UNCHANGED,
+                            )
+                            error = compute_mae(range_image, range_image_gt) * 100
+                            errors.append(error)
+                            progress.print(f"range MAE {camera_idx}: {error} cm.")
+
+                            output_path = self.output_path / split / rendered_output_name / f"colored_{image_name}"
                             output_image = (
                                 colormaps.apply_depth_colormap(
                                     output_image,
-                                    accumulation=outputs["depth"],
+                                    accumulation=None,
                                     near_plane=self.depth_near_plane,
                                     far_plane=self.depth_far_plane,
                                     colormap_options=self.colormap_options,
@@ -869,6 +1038,14 @@ class DatasetRender(BaseRender):
                                 .cpu()
                                 .numpy()
                             )
+                        elif is_normals:
+                            cv2.imwrite(
+                                str(output_path.with_suffix(".tiff")),
+                                output_image.cpu().numpy().astype(np.float32),
+                            )
+                            output_image = output_image / output_image.norm(dim=2, keepdim=True)
+                            output_image = ((output_image + 1.0) / 2.0).cpu().numpy()  # normalize to [0, 1]
+                            output_path = self.output_path / split / rendered_output_name / f"colored_{image_name}"
                         else:
                             output_image = (
                                 colormaps.apply_colormap(
@@ -885,6 +1062,8 @@ class DatasetRender(BaseRender):
                                 np.save(f, output_image)
                         elif self.image_format == "png":
                             media.write_image(output_path.with_suffix(".png"), output_image, fmt="png")
+                        elif self.image_format == "tiff":
+                            media.write_image(output_path.with_suffix(".tiff"), output_image, fmt="tiff")
                         elif self.image_format == "jpeg":
                             media.write_image(
                                 output_path.with_suffix(".jpg"), output_image, fmt="jpeg", quality=self.jpeg_quality
@@ -901,6 +1080,17 @@ class DatasetRender(BaseRender):
         for split in self.split.split("+"):
             table.add_row(f"Outputs {split}", str(self.output_path / split))
         CONSOLE.print(Panel(table, title="[bold][green]:tada: Render on split {} Complete :tada:[/bold]", expand=False))
+
+        mean_error = np.mean(errors)
+        std_error = np.std(errors)
+        min_error = np.min(errors)
+        max_error = np.max(errors)
+        print(
+            f"Test complete:\n"
+            f"{len(errors)} frames rendered in total.\n"
+            f"timing(second): (itr){timer.average_t:.6f}/(total){timer.total_t:.6f}.\n"
+            f"error(cm): (mean){mean_error:.3f}/(std){std_error:.3f}/(min){min_error:.3f}/(max){max_error:.3f}."
+        )
 
 
 Commands = tyro.conf.FlagConversionOff[

@@ -129,5 +129,9 @@ COPY --from=builder /usr/local/bin/ns* /usr/local/bin/
 # Install nerfstudio cli auto completion
 RUN /bin/bash -c 'ns-install-cli --mode install'
 
+ARG TIMEZONE=America/Los_Angeles
+ENV TZ=${TIMEZONE}
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
 # Bash as default entrypoint.
 CMD /bin/bash -l

@@ -24,7 +24,7 @@ from torch import Tensor
 
 from nerfstudio.utils import colors
 
-Colormaps = Literal["default", "turbo", "viridis", "magma", "inferno", "cividis", "gray", "pca"]
+Colormaps = Literal["default", "turbo", "viridis", "magma", "inferno", "cividis", "gray", "pca", "jet"]
 
 
 @dataclass(frozen=True)
@@ -106,12 +106,18 @@ def apply_float_colormap(image: Float[Tensor, "*bs 1"], colormap: Colormaps = "v
     image = torch.nan_to_num(image, 0)
     if colormap == "gray":
         return image.repeat(1, 1, 3)
-    image_long = (image * 255).long()
-    image_long_min = torch.min(image_long)
-    image_long_max = torch.max(image_long)
-    assert image_long_min >= 0, f"the min value is {image_long_min}"
-    assert image_long_max <= 255, f"the max value is {image_long_max}"
-    return torch.tensor(matplotlib.colormaps[colormap].colors, device=image.device)[image_long[..., 0]]
+
+    colormap = matplotlib.colormaps[colormap]
+    if hasattr(colormap, "colors"):
+        image_long = (image * 255).long()
+        image_long_min = torch.min(image_long)
+        image_long_max = torch.max(image_long)
+        assert image_long_min >= 0, f"the min value is {image_long_min}"
+        assert image_long_max <= 255, f"the max value is {image_long_max}"
+        return torch.tensor(matplotlib.colormaps[colormap].colors, device=image.device)[image_long[..., 0]]
+    else:
+        image = torch.tensor(colormap(image[..., 0].cpu().numpy()), device=image.device)
+        return image[..., :3]
 
 
 def apply_depth_colormap(
@@ -137,17 +143,16 @@ def apply_depth_colormap(
     near_plane = near_plane if near_plane is not None else float(torch.min(depth))
     far_plane = far_plane if far_plane is not None else float(torch.max(depth))
 
-    # depth = (depth - near_plane) / (far_plane - near_plane + 1e-10)
-    # depth = torch.clip(depth, 0, 1)
-    depth = depth / 6553.5
+    depth = (depth - near_plane) / (far_plane - near_plane + 1e-10)
+    depth = torch.clip(depth, 0, 1)
     # depth = torch.nan_to_num(depth, nan=0.0) # TODO(ethan): remove this
 
-    # colored_image = apply_colormap(depth, colormap_options=colormap_options)
+    colored_image = apply_colormap(depth, colormap_options=colormap_options)
 
-    # if accumulation is not None:
-    #     colored_image = colored_image * accumulation + (1 - accumulation)
+    if accumulation is not None:
+        colored_image = colored_image * accumulation + (1 - accumulation)
 
-    return depth
+    return colored_image
 
 
 def apply_boolean_colormap(

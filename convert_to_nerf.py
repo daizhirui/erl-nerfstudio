@@ -51,27 +51,28 @@ def get_matrix(R, T):
 
 
 def convert_to_nerf(base_path, output_file=None):
-
-    sensor_setting_file_path = os.path.join(base_path, "sensor_setting.yaml")
+    # train and test have the same sensor setting
+    sensor_setting_file_path = os.path.join(base_path, "scans/train", "sensor_setting.yaml")
     with open(sensor_setting_file_path, "r") as f:
         sensor_setting = yaml.safe_load(f)
-
     transforms_json = sddf_header_to_nerf(sensor_setting)
-
-    poses_pickle_file_path = os.path.join(base_path, "poses.pkl")  # path/train/poses.pkl
-    with open(poses_pickle_file_path, "rb") as f:
-        poses = pickle.load(f)
-
-    frames_list = [
-        {
-            "file_path": f"rgb/{idx:06}.png",
-            "depth_file_path": f"depth/{idx:06}.tiff",
-            "transform_matrix": get_matrix(*sddf_pose_to_nerf_pose(*pose)).tolist(),
-        }
-        for idx, pose in enumerate(poses)
-    ]
-
-    transforms_json["frames"] = frames_list
+    transforms_json["frames"] = []
+    for split in ["train", "test"]:
+        poses_pickle_file_path = os.path.join(base_path, "scans", split, "poses.pkl")
+        with open(poses_pickle_file_path, "rb") as f:
+            poses = pickle.load(f)
+        frames_list = [
+            {
+                "file_path": f"scans/{split}/rgb/{idx:06}.png",
+                "depth_file_path": f"scans/{split}/depth/{idx:06}.tiff",
+                "transform_matrix": get_matrix(*sddf_pose_to_nerf_pose(*pose)).tolist(),
+            }
+            for idx, pose in enumerate(poses)
+        ]
+        split_filenames = [frame["file_path"] for frame in frames_list]
+        transforms_json["frames"].extend(frames_list)
+        transforms_json[f"{split}_filenames"] = split_filenames
+    transforms_json["val_filenames"] = transforms_json["test_filenames"]
 
     if output_file is None:
         json_string = json.dumps(transforms_json, indent=2)
