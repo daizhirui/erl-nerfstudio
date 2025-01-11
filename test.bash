@@ -30,7 +30,6 @@ for dataset in $(ls $DATA_DIR); do
                 --rendered-output-names rgb depth \
                 --colormap-options.colormap jet | tee $OUTPUT_DIR/$model/$dataset/test/log.txt
             set +x
-#            break   # each model only has one exp folder
         done
 
         MODEL_DIR=$OUTPUT_DIR/$model-normals/$dataset/$model
@@ -50,7 +49,6 @@ for dataset in $(ls $DATA_DIR); do
                 --rendered-output-names rgb depth normals \
                 --colormap-options.colormap jet | tee $OUTPUT_DIR/$model-normals/$dataset/test/log.txt
             set +x
-#            break   # each model only has one exp folder
         done
     done
 done
