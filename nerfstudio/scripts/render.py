@@ -69,11 +69,12 @@ class CpuTimer:
         self.message = message
         self.repeats = repeats
         self.warmup = warmup
+        self.progress = progress
         self.cnt = 0
         self.t = 0
         self.average_t = 0
+        self._total_t = 0
         self.total_t = 0
-        self.progress = progress
 
     def __enter__(self):
         self.start = time.perf_counter()
@@ -87,9 +88,9 @@ class CpuTimer:
         self.cnt += 1
         assert self.cnt <= self.repeats
         self.t = self.end - self.start
-        n = self.repeats - self.warmup
-        self.average_t += self.t / n
-        self.total_t += self.t
+        self._total_t += self.t
+        self.average_t = self._total_t / (self.cnt - self.warmup)
+        self.total_t = self.average_t * self.cnt
         self.progress.print(f"{self.message}: {self.t:.6f}(cur)/{self.average_t:.6f}(avg) seconds")
 
 
@@ -99,11 +100,12 @@ class GpuTimer:
         self.message = message
         self.repeats = repeats
         self.warmup = warmup
+        self.progress = progress
         self.cnt = 0
         self.t = 0
         self.average_t = 0
+        self._total_t = 0
         self.total_t = 0
-        self.progress = progress
 
     def __enter__(self):
         self.start = torch.cuda.Event(enable_timing=True)
@@ -120,9 +122,9 @@ class GpuTimer:
             return
         self.cnt += 1
         assert self.cnt <= self.repeats
-        n = self.repeats - self.warmup
-        self.average_t += self.t / n
-        self.total_t += self.t
+        self._total_t += self.t
+        self.average_t = self._total_t / (self.cnt - self.warmup)
+        self.total_t = self.average_t * self.cnt
         self.progress.print(
             f"{self.message}: {self.t:.6f}(cur)/{self.average_t:.6f}(avg)/{self.total_t:.6f}(total) seconds"
         )
@@ -303,6 +305,7 @@ def _render_trajectory_video(
                         sys.exit(1)
                     output_image = outputs[rendered_output_name]
                     is_depth = rendered_output_name.find("depth") != -1
+                    is_normals = rendered_output_name.find("normals") != -1
                     if is_depth:
                         depth_folder = output_image_dir / rendered_output_name
                         os.makedirs(depth_folder, exist_ok=True)
@@ -330,6 +333,15 @@ def _render_trajectory_video(
                             .cpu()
                             .numpy()
                         )
+                    elif is_normals:
+                        normals_folder = output_image_dir / "normals"
+                        os.makedirs(normals_folder, exist_ok=True)
+                        cv2.imwrite(
+                            str(normals_folder / f"{camera_idx:06d}.tiff"),
+                            output_image.cpu().numpy().astype(np.float32)[..., ::-1],  # RGB to BGR
+                        )
+                        output_image = output_image / output_image.norm(dim=2, keepdim=True)
+                        output_image = ((output_image + 1.0) * 0.5 * 255).cpu().numpy().astype(np.uint8)
                     elif rendered_output_name == "rgba" or rendered_output_name == "rgb":
                         output_image = output_image.detach().cpu().numpy()
                         rgb_folder = output_image_dir / rendered_output_name
@@ -405,10 +417,11 @@ def _render_trajectory_video(
     else:
         table.add_row("Images", str(output_image_dir))
     CONSOLE.print(Panel(table, title="[bold][green]:tada: Render Complete :tada:[/bold]", expand=False))
+    total_t = timer.average_t * len(cameras)
     CONSOLE.print(
         f"Test complete:\n"
         f"{len(cameras)} frames rendered in total.\n"
-        f"timing(second): (itr){timer.average_t:.6f}/(total){timer.total_t:.6f}."
+        f"timing(second): (itr){timer.average_t:.6f}/(total){total_t:.6f}."
     )
 
 
@@ -1005,9 +1018,9 @@ class DatasetRender(BaseRender):
                                 range_image.cpu().numpy().astype(np.float32),
                             )
                             media.write_image(
-                                output_path.with_suffix(".png"),
+                                range_folder / f"colored_{image_name}",
                                 colormaps.apply_depth_colormap(
-                                    range_image,
+                                    range_image.unsqueeze(2),
                                     accumulation=None,
                                     near_plane=None,
                                     far_plane=None,
@@ -1021,6 +1034,20 @@ class DatasetRender(BaseRender):
                             range_image_gt = cv2.imread(
                                 str(range_gt_folder / image_name.with_suffix(".tiff")),
                                 cv2.IMREAD_UNCHANGED,
+                            )
+                            error_img = np.abs(range_image - range_image_gt)
+                            media.write_image(
+                                range_folder / f"colored_error_{image_name}",
+                                colormaps.apply_depth_colormap(
+                                    torch.from_numpy(error_img).to(pipeline.device).unsqueeze(2),
+                                    accumulation=None,
+                                    near_plane=None,
+                                    far_plane=None,
+                                    colormap_options=self.colormap_options,
+                                )
+                                .cpu()
+                                .numpy(),
+                                fmt="png",
                             )
                             error = compute_mae(range_image, range_image_gt) * 100
                             errors.append(error)
@@ -1041,10 +1068,10 @@ class DatasetRender(BaseRender):
                         elif is_normals:
                             cv2.imwrite(
                                 str(output_path.with_suffix(".tiff")),
-                                output_image.cpu().numpy().astype(np.float32),
+                                output_image.cpu().numpy().astype(np.float32)[..., ::-1],  # RGB to BGR
                             )
                             output_image = output_image / output_image.norm(dim=2, keepdim=True)
-                            output_image = ((output_image + 1.0) / 2.0).cpu().numpy()  # normalize to [0, 1]
+                            output_image = ((output_image + 1.0) * 0.5 * 255).cpu().numpy().astype(np.uint8)
                             output_path = self.output_path / split / rendered_output_name / f"colored_{image_name}"
                         else:
                             output_image = (
@@ -1085,12 +1112,16 @@ class DatasetRender(BaseRender):
         std_error = np.std(errors)
         min_error = np.min(errors)
         max_error = np.max(errors)
+        num_params = sum(p.numel() for p in pipeline.model.parameters())
         print(
             f"Test complete:\n"
             f"{len(errors)} frames rendered in total.\n"
+            f"model size: {num_params / 1e6:.3f}M.\n"
             f"timing(second): (itr){timer.average_t:.6f}/(total){timer.total_t:.6f}.\n"
             f"error(cm): (mean){mean_error:.3f}/(std){std_error:.3f}/(min){min_error:.3f}/(max){max_error:.3f}."
         )
+        for i, error in enumerate(errors):
+            print(f"error {i}: {error:.3f} cm.")
 
 
 Commands = tyro.conf.FlagConversionOff[
