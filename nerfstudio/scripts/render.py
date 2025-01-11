@@ -1097,6 +1097,21 @@ class DatasetRender(BaseRender):
                             )
                         else:
                             raise ValueError(f"Unknown image format {self.image_format}")
+            mean_error = np.mean(errors)
+            std_error = np.std(errors)
+            min_error = np.min(errors)
+            max_error = np.max(errors)
+            num_params = sum(p.numel() for p in pipeline.model.parameters())
+            print(
+                f"Test complete:\n"
+                f"{len(errors)} frames rendered in total.\n"
+                f"model size: {num_params / 1e6:.3f}M.\n"
+                f"timing(second): (itr){timer.average_t:.6f}/(total){timer.total_t:.6f}.\n"
+                f"error(cm): (mean){mean_error:.3f}/(std){std_error:.3f}/(min){min_error:.3f}/(max){max_error:.3f}."
+            )
+            for i, error in enumerate(errors):
+                print(f"error {i}: {error:.3f} cm.")
+            np.save(self.output_path / split / "errors.npy", errors)
 
         table = Table(
             title=None,
@@ -1107,21 +1122,6 @@ class DatasetRender(BaseRender):
         for split in self.split.split("+"):
             table.add_row(f"Outputs {split}", str(self.output_path / split))
         CONSOLE.print(Panel(table, title="[bold][green]:tada: Render on split {} Complete :tada:[/bold]", expand=False))
-
-        mean_error = np.mean(errors)
-        std_error = np.std(errors)
-        min_error = np.min(errors)
-        max_error = np.max(errors)
-        num_params = sum(p.numel() for p in pipeline.model.parameters())
-        print(
-            f"Test complete:\n"
-            f"{len(errors)} frames rendered in total.\n"
-            f"model size: {num_params / 1e6:.3f}M.\n"
-            f"timing(second): (itr){timer.average_t:.6f}/(total){timer.total_t:.6f}.\n"
-            f"error(cm): (mean){mean_error:.3f}/(std){std_error:.3f}/(min){min_error:.3f}/(max){max_error:.3f}."
-        )
-        for i, error in enumerate(errors):
-            print(f"error {i}: {error:.3f} cm.")
 
 
 Commands = tyro.conf.FlagConversionOff[
