@@ -131,7 +131,7 @@ class GpuTimer:
 
 
 def compute_mae(pred, gt):
-    mask = gt > 1e-3
+    mask = (gt > 1e-3) & np.isfinite(gt)
     error = np.mean(np.abs(pred[mask] - gt[mask]))  # mean absolute error
     return error
 

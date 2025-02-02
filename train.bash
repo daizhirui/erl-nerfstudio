@@ -24,7 +24,7 @@ for dataset in $(ls $DATA_DIR); do
     for model in $MODELS; do
         if [ ! -d $OUTPUT_DIR/$model/$dataset ] || [ $SKIP_EXISTING -eq 0 ]; then
             set -x
-            ns-train $model --data $DATA_DIR/$dataset \
+            PYTHONPATH=$(pwd) python3 nerfstudio/scripts/train.py $model --data $DATA_DIR/$dataset \
                 --output-dir $OUTPUT_DIR/$model \
                 $MODEL_ARGS $OTHER_ARGS $DATA_ARGS
             set +x
@@ -33,7 +33,7 @@ for dataset in $(ls $DATA_DIR); do
         fi
         if [ ! -d $OUTPUT_DIR/$model-normals/$dataset ] || [ $SKIP_EXISTING -eq 0 ]; then
             set -x
-            ns-train $model --data $DATA_DIR/$dataset \
+            PYTHONPATH=$(pwd) python3 nerfstudio/scripts/train.py $model --data $DATA_DIR/$dataset \
                 --output-dir $OUTPUT_DIR/$model-normals \
                 --pipeline.model.predict-normals True \
                 $MODEL_ARGS $OTHER_ARGS $DATA_ARGS
