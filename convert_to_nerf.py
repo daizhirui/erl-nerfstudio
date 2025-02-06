@@ -64,7 +64,7 @@ def convert_to_nerf(base_path, output_file=None):
         frames_list = [
             {
                 "file_path": f"scans/{split}/rgb/{idx:06}.png",
-                "depth_file_path": f"scans/{split}/depth/{idx:06}.tiff",
+                "depth_file_path": f"scans/{split}/depth/{idx:06}.png",
                 "transform_matrix": get_matrix(*sddf_pose_to_nerf_pose(*pose)).tolist(),
             }
             for idx, pose in enumerate(poses)

@@ -63,6 +63,29 @@ from nerfstudio.utils.rich_utils import CONSOLE, ItersPerSecColumn
 from nerfstudio.utils.scripts import run_command
 
 
+def save_distances(filename: str, distances: np.ndarray, scale=1000.0) -> bool:
+    distances = np.round(distances.astype(np.float64) * scale).astype(np.uint16)
+    return cv2.imwrite(filename, distances)
+
+
+def load_distances(filename: str, scale=1000.0) -> np.ndarray[np.float32]:
+    distances = cv2.imread(filename, cv2.IMREAD_UNCHANGED)
+    return distances.astype(np.float32) / scale
+
+
+def save_normals(filename: str, normals: np.ndarray, scale=65535.0) -> bool:
+    # [-1, 1] to [0, 1], then to [0, 65535]
+    normals = (normals.astype(np.float64) + 1) * 0.5 * scale
+    normals = normals.astype(np.uint16)
+    return cv2.imwrite(filename, normals[..., ::-1])
+
+
+def load_normals(filename: str, scale=65535.0) -> np.ndarray[np.float32]:
+    normals = cv2.imread(filename, cv2.IMREAD_UNCHANGED)
+    normals = normals.astype(np.float32) / scale * 2 - 1
+    return normals[..., ::-1]
+
+
 class CpuTimer:
 
     def __init__(self, message, repeats: int = 1, warmup: int = 0, progress=CONSOLE):
@@ -313,15 +336,12 @@ def _render_trajectory_video(
                         if hasattr(pipeline.datamanager, "train_dataparser_outputs"):
                             scale = pipeline.datamanager.train_dataparser_outputs.dataparser_scale
                             depth_image = depth_image / scale  # remove scaling
-                        cv2.imwrite(
-                            str(depth_folder / f"{camera_idx:06d}.tiff"),
-                            depth_image.cpu().numpy().astype(np.float32),
-                        )
+                        save_distances(str(depth_folder / f"{camera_idx:06d}.png"), depth_image.cpu().numpy())
 
                         range_image = (depth_image * rays_norm).cpu().numpy()
                         range_folder = output_image_dir / "range"
                         os.makedirs(range_folder, exist_ok=True)
-                        cv2.imwrite(str(range_folder / f"{camera_idx:06d}.tiff"), range_image.astype(np.float32))
+                        save_distances(str(range_folder / f"{camera_idx:06d}.png"), range_image)
 
                         output_image = (
                             colormaps.apply_depth_colormap(
@@ -336,10 +356,7 @@ def _render_trajectory_video(
                     elif is_normals:
                         normals_folder = output_image_dir / "normals"
                         os.makedirs(normals_folder, exist_ok=True)
-                        cv2.imwrite(
-                            str(normals_folder / f"{camera_idx:06d}.tiff"),
-                            output_image.cpu().numpy().astype(np.float32)[..., ::-1],  # RGB to BGR
-                        )
+                        save_normals(str(normals_folder / f"{camera_idx:06d}.png"), output_image.cpu().numpy())
                         output_image = output_image / output_image.norm(dim=2, keepdim=True)
                         output_image = ((output_image + 1.0) * 0.5 * 255).cpu().numpy().astype(np.uint8)
                     elif rendered_output_name == "rgba" or rendered_output_name == "rgb":
@@ -1006,17 +1023,12 @@ class DatasetRender(BaseRender):
                             output_image = output_image.detach().cpu().numpy()
                         elif is_depth:
                             depth_image = output_image[..., 0] / scale  # remove scaling
-                            cv2.imwrite(
-                                str(output_path.with_suffix(".tiff")),
-                                depth_image.cpu().numpy().astype(np.float32),
-                            )
+                            save_distances(str(output_path.with_suffix(".png")), depth_image.cpu().numpy())
 
                             range_image = depth_image * rays_norm
                             output_path = range_folder / image_name
-                            cv2.imwrite(
-                                str(output_path.with_suffix(".tiff")),
-                                range_image.cpu().numpy().astype(np.float32),
-                            )
+                            save_distances(str(output_path.with_suffix(".png")), range_image.cpu().numpy())
+
                             media.write_image(
                                 range_folder / f"colored_{image_name}",
                                 colormaps.apply_depth_colormap(
@@ -1031,10 +1043,7 @@ class DatasetRender(BaseRender):
                                 fmt="png",
                             )
                             range_image = range_image.cpu().numpy()
-                            range_image_gt = cv2.imread(
-                                str(range_gt_folder / image_name.with_suffix(".tiff")),
-                                cv2.IMREAD_UNCHANGED,
-                            )
+                            range_image_gt = load_distances(str(range_gt_folder / image_name.with_suffix(".png")))
                             error_img = np.abs(range_image - range_image_gt)
                             media.write_image(
                                 range_folder / f"colored_error_{image_name}",
@@ -1066,10 +1075,7 @@ class DatasetRender(BaseRender):
                                 .numpy()
                             )
                         elif is_normals:
-                            cv2.imwrite(
-                                str(output_path.with_suffix(".tiff")),
-                                output_image.cpu().numpy().astype(np.float32)[..., ::-1],  # RGB to BGR
-                            )
+                            save_normals(str(output_path.with_suffix(".png")), output_image.cpu().numpy())
                             output_image = output_image / output_image.norm(dim=2, keepdim=True)
                             output_image = ((output_image + 1.0) * 0.5 * 255).cpu().numpy().astype(np.uint8)
                             output_path = self.output_path / split / rendered_output_name / f"colored_{image_name}"
